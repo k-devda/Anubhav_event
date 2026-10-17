@@ -123,9 +123,17 @@ function createApp(db, opts) {
   }
 
   async function handler(req, res) {
-    const url = new URL(req.url, 'http://localhost');
+    // Parse defensively: a malformed target such as "//" must never throw outside the try block
+    let url;
     try {
-      if (url.pathname.startsWith('/api/')) await handleApi(req, res, url);
+      if (typeof req.url !== 'string' || !req.url.startsWith('/') || req.url.startsWith('//')) throw new Error('bad target');
+      url = new URL(req.url, 'http://localhost');
+    } catch (e) {
+      return sendJson(res, 400, { error: 'Bad request.' });
+    }
+    try {
+      if (url.pathname === '/healthz') { db.prepare('SELECT 1').get(); sendJson(res, 200, { ok: true }); }
+      else if (url.pathname.startsWith('/api/')) await handleApi(req, res, url);
       else serveStatic(req, res, url);
     } catch (e) {
       if (e instanceof AppError) {

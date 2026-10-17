@@ -57,3 +57,20 @@ server/   index.js (start) · app.js (router, static, headers) · auth.js · db.
 public/   HTML pages, css/, js/core (api, store, domain, ui, shell, boot) and js/pages
 tests/    node:test integration tests
 ```
+
+## Deploying (any host that runs Docker or Node)
+
+The repo includes a `Dockerfile` (no npm install step - the app has no dependencies).
+
+| Setting | Value |
+|---|---|
+| Start command | `node --no-warnings server/index.js` (Docker: automatic) |
+| Port | the platform's `PORT` is used automatically (default 3000) |
+| Health check path | `/healthz` |
+| **Persistent volume** | mount at `/data` - the SQLite database lives at `/data/anubhav.sqlite`. **Without a volume all data is lost on every redeploy/restart.** |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | creates the first admin on first start (only if no admin exists yet). You must choose a new password at first sign-in. Remove `ADMIN_PASSWORD` from the platform afterwards. |
+| `ADMIN_NAME` | optional display name for that admin |
+| `NODE_ENV`, `COOKIE_SECURE`, `TRUST_PROXY`, `HOST`, `DB_FILE` | already set by the Dockerfile (`production`, `1`, `1`, `0.0.0.0`, `/data/anubhav.sqlite`) |
+
+A brand-new database starts with Event Day 1 (27 Oct 2026), Event Day 2 (28 Oct 2026) and the venue "SLS Building".
+Do not run `seed-demo` on a live database. Back up the volume regularly.

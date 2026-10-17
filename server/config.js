@@ -8,7 +8,7 @@ module.exports = {
   root,
   isProd,
   port: Number(process.env.PORT) || 3000,
-  host: process.env.HOST || '127.0.0.1',
+  host: process.env.HOST || (isProd ? '0.0.0.0' : '127.0.0.1'),
   dbFile: process.env.DB_FILE || path.join(root, 'data', 'anubhav.sqlite'),
   publicDir: path.join(root, 'public'),
   // Set COOKIE_SECURE=1 when the site is served over HTTPS (always in production behind a TLS proxy)

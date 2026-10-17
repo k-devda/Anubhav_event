@@ -312,4 +312,22 @@ Business rules the server enforces
     tests/                   automated tests
   anubhav-ui-prototype/      Phase 1 UI-only version (kept for reference)
 
+11. DEPLOYING TO A HOST (DOCKER OR NODE)
+---------------------------------------------------------------------
+  The project contains a Dockerfile. There is nothing to "npm install".
+    Start command   : node --no-warnings server/index.js   (Docker: automatic)
+    Port            : the platform's PORT variable is used automatically
+    Health check    : /healthz
+    PERSISTENT DISK : mount a volume at /data (database = /data/anubhav.sqlite).
+                      WITHOUT A VOLUME ALL DATA IS LOST ON EVERY REDEPLOY.
+    First admin     : set ADMIN_EMAIL and ADMIN_PASSWORD (10+ chars, letters
+                      + a number) on the platform. The admin is created on the
+                      first start only and must choose a new password at the
+                      first sign-in. Delete ADMIN_PASSWORD afterwards.
+    Already set by the Dockerfile: NODE_ENV=production, COOKIE_SECURE=1,
+                      TRUST_PROXY=1, HOST=0.0.0.0, DB_FILE=/data/anubhav.sqlite
+  A brand-new database starts with Event Day 1 (27 Oct 2026), Event Day 2
+  (28 Oct 2026) and the venue "SLS Building".
+  Never run "npm run seed-demo" on a live database. Back up the volume.
+
 =====================================================================

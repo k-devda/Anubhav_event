@@ -20,6 +20,13 @@ const VIS_KEYS = ['teams', 'schedule', 'announcements', 'findRole', 'registratio
 function defaults() {
   const s = loadSeed().settings;
   s.visibility.rosterNames = true;
+  // A brand-new install starts with the real event: two days at the SLS Building.
+  // (Edit anytime in Admin -> Settings -> Event days / Event details.)
+  s.days = [
+    { id: 'event', label: 'Event Day 1', date: '2026-10-27', note: '' },
+    { id: 'day2', label: 'Event Day 2', date: '2026-10-28', note: '' }
+  ];
+  s.eventInfo = { date: '27–28 October 2026', venue: 'SLS Building' };
   return s;
 }
 
