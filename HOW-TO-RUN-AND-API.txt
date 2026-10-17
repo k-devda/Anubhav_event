@@ -1,0 +1,315 @@
+=====================================================================
+ANUBHAV VOLUNTEER MANAGEMENT SYSTEM  -  RUN GUIDE, DATABASE AND API
+A Day of Learning & Training
+Sanket Health & Wellness Centre  x  PDEU College
+=====================================================================
+
+0. QUICK START - ADMIN LOGIN IN 5 STEPS (READ THIS FIRST)
+---------------------------------------------------------------------
+ STEP 1  Open a terminal and run:
+           cd "D:\REPORTS MAKEING SANKET PROJECT\anubhav-app"
+           npm start
+         Leave this window open. (If you see "address in use", use
+         another port:  PowerShell  $env:PORT=3002; npm start )
+ STEP 2  Open the browser at  http://localhost:3000/login.html
+         (use the port the terminal prints).
+ STEP 3  Sign in with the email and the TEMPORARY password that
+         "npm run create-admin" printed.
+ STEP 4  A screen "Choose a new password" appears. Fill all 3 boxes:
+           - Temporary password : the one you just typed to sign in
+           - New password       : your own (10+ characters, letters + 1 number)
+           - Confirm            : same as new password
+         Click "Save password". Now you are inside the admin dashboard.
+         (Until this step is done you cannot open any admin page.)
+ STEP 5  Next time sign in with your email + YOUR NEW password.
+ Forgot the password?   npm run reset-password -- your@email
+ NOTE: the admin pages (/admin/...) only open after signing in.
+
+ THE FLOW
+   Volunteer: Register (register.html) -> gets ID like ANU-0044 -> status
+   "Pending" -> Admin approves (Volunteers page) -> Admin assigns team,
+   role, venue, time (Assignments page) -> Volunteer checks "Find My Role"
+   with ID + last 4 digits of mobile -> on the event day Admin marks
+   Attendance -> Reports & Exports for CSV/print.
+
+ LIVE UPDATES IN THE ADMIN PANEL
+   Every public registration is saved straight into the database and shows up
+   in Admin -> Volunteers (status Pending), on the Dashboard (Recent
+   registrations + Pending count) and as a red/gold number on the Volunteers
+   menu. The admin screens re-check the server every 30 seconds, so a new
+   registration pops up with a message "New registration: <name>" without
+   reloading the page. Admin manages everything from there: approve/reject,
+   assign team/role/venue, attendance, announcements, reports.
+
+1. WHAT THIS IS
+---------------------------------------------------------------------
+- Front end : plain HTML, CSS and JavaScript (folder: public/).
+              No React / Vue / Angular, no build step.
+- Back end  : Node.js server (folder: server/). It uses only Node's
+              built-in modules, so there is NOTHING to "npm install".
+- Database  : SQLite, stored in ONE file: data/anubhav.sqlite
+- Needs     : Node.js 22.13 or newer (built and tested on Node 24).
+
+Check your Node version:      node -v
+
+
+2. HOW TO RUN (STEP BY STEP)
+---------------------------------------------------------------------
+Open a terminal (PowerShell or Git Bash) and go into the folder:
+
+    cd "D:\REPORTS MAKEING SANKET PROJECT\anubhav-app"
+
+STEP 1 - Create the first admin account (only once):
+
+    npm run create-admin -- you@example.com "Your Name"
+
+  It prints a ONE-TIME temporary password. Copy it. You must change
+  it the first time you sign in.
+
+STEP 2 (optional) - Load sample/demo data so you can explore:
+
+    npm run seed-demo
+
+  Do NOT run this on the real event database. It adds invented
+  volunteers, teams, venues, shifts, assignments and announcements.
+
+STEP 3 - Start the server:
+
+    npm start
+
+  Open in the browser:
+      Public site : http://localhost:3000/
+      Admin login : http://localhost:3000/login.html
+
+  (If port 3000 is busy, start with another port:
+      PowerShell:  $env:PORT=3001; npm start
+      Git Bash:    PORT=3001 npm start )
+
+To stop the server: press Ctrl + C in the terminal.
+
+
+3. OTHER COMMANDS
+---------------------------------------------------------------------
+    npm test                                   Run the 29 automated tests
+    npm run reset-password -- you@example.com  New temporary password for
+                                               a user (e.g. forgotten password)
+    npm run create-admin -- email "Name"       Add another admin from the terminal
+
+Starting again from zero (deletes ALL data!):
+    1. Stop the server.
+    2. Delete the files  data/anubhav.sqlite  data/anubhav.sqlite-wal
+       data/anubhav.sqlite-shm  (whichever exist)
+    3. Run  npm run create-admin  again, then  npm start.
+
+
+4. SETTINGS (ENVIRONMENT VARIABLES) - all optional
+---------------------------------------------------------------------
+    PORT            Port number                       (default 3000)
+    HOST            Address to listen on              (default 127.0.0.1,
+                    use 0.0.0.0 to allow other computers on your network)
+    DB_FILE         Path of the database file         (default data/anubhav.sqlite)
+    NODE_ENV        Set to "production" when live
+    COOKIE_SECURE   Set to 1 when the site is served over HTTPS
+    TRUST_PROXY     Set to 1 ONLY when behind your own reverse proxy
+
+
+5. USER ROLES (who can do what)
+---------------------------------------------------------------------
+    admin        Everything: settings, admin users, delete records
+    coordinator  Read + add/edit volunteers, assignments, teams, venues,
+                 shifts, attendance, announcements. Cannot delete,
+                 cannot open Settings or manage users.
+    viewer       Read-only (all editing buttons are hidden and the
+                 server refuses changes anyway).
+
+Add/disable users and reset their passwords:
+    Admin dashboard -> Settings -> Admin users.
+
+
+6. THE DATABASE
+---------------------------------------------------------------------
+Type     : SQLite (single file: data/anubhav.sqlite)
+Mode     : WAL (you may also see anubhav.sqlite-wal and -shm files; they
+           belong to the database - keep them together)
+Safety   : foreign keys are ON; table structure is versioned
+           (migrations run automatically at start-up).
+
+TABLES
+  settings        Event name, subtitle, organizers, timezone, event days,
+                  Volunteer-ID format, registration-form field config,
+                  public page visibility, contact placeholders,
+                  default assignment instructions.
+  users           Admin/coordinator/viewer accounts. Passwords are stored
+                  ONLY as scrypt hashes (never as plain text).
+  auth_sessions   Active sign-ins (the cookie token is stored hashed).
+  volunteers      Registrations: name, mobile, email, institution,
+                  course, year, skills, preferred areas, availability,
+                  experience, notes, status (Pending/Approved/Rejected),
+                  Volunteer number (seq -> shown as ANU-0001 etc).
+  venues          Name, code, area, floor, coordinator, capacity, setup
+                  notes, map link, status (Active/Inactive/Archived).
+  teams           Name, description, leader, assistant, responsibilities,
+                  roles, venue, instructions, archived flag.
+  shifts          Team + venue + day, reporting/setup/start/end time,
+                  positions needed, coordinator, instructions.
+  assignments     Volunteer -> team/role/venue/day/times/leader/instructions,
+                  status (Active/Draft/Cancelled). One volunteer can have
+                  many assignments.
+  event_sessions  The public Event Schedule (session name, time, venue,
+                  team, coordinator).
+  announcements   Title, message, audience (all / specific team), priority,
+                  status (Draft/Published/Archived), expiry date.
+  attendance      One row per assignment: Not Marked / Present / Absent /
+                  Late / Excused, check-in time, notes.
+  activity        Audit log: who changed what and when.
+
+RELATIONS (simplified)
+  volunteers 1--* assignments *--1 teams 1--* shifts
+  assignments *--1 venues,  assignments *--0..1 shifts
+  assignments 1--0..1 attendance
+  Deleting a volunteer/assignment removes their dependent rows;
+  deleting a venue or shift only clears the link (rows are kept).
+
+BACKUP (IMPORTANT FOR THE REAL EVENT)
+  Stop the server and copy the whole data/ folder, or copy
+  anubhav.sqlite together with its -wal and -shm files. Do this daily
+  and before the event. To restore, put the files back in data/.
+
+DATA ENTERED BY THE USER vs SAMPLE DATA
+  Real data = whatever is in data/anubhav.sqlite. The sample data comes
+  only from "npm run seed-demo".
+
+
+7. API (YES - A REST API WAS ADDED)
+---------------------------------------------------------------------
+All endpoints are on the same server (e.g. http://localhost:3000/api/...).
+Data is sent and received as JSON.
+
+Rules for every request that changes data (POST / PUT / PATCH / DELETE):
+  - header  Content-Type: application/json
+  - header  X-Requested-With: anubhav       (anti-CSRF protection)
+  - if an Origin header is sent it must be the same site
+Sign-in is a secure cookie (HttpOnly, SameSite=Strict) set by /login.
+
+Error format:  { "error": "message", "errors": { "field": "problem" } }
+Status codes:  200 OK, 201 created, 400 bad JSON, 401 not signed in,
+               403 not allowed, 404 not found, 409 conflict (duplicate),
+               413 too large, 422 validation failed, 429 too many requests.
+
+--- 7.1 PUBLIC (no sign-in) ---
+GET   /api/public/bootstrap
+        Public snapshot used by the website: settings, teams (with
+        member names if allowed), venues, shifts, schedule sessions and
+        published announcements. Contains NO emails or mobile numbers.
+
+POST  /api/public/register
+        Volunteer registration. Body: name, mobile, email, consent=true
+        and optional institution, course, year, skills[], areas[],
+        availability[], experience, notes (which are required depends on
+        Settings). Returns { code: "ANU-0044", name }.
+        Protected by: validation, duplicate-email check, hidden
+        honeypot field, limit of 6 per hour per IP.
+
+POST  /api/public/find-role
+        Find My Role. Body: query (name or Volunteer ID) and
+        mobileLast4 (last 4 digits of the registered mobile).
+        Returns status: ok / pending / unassigned / no_assignments /
+        ambiguous / not_found (+ the assignment details when ok).
+        Protected by: verification digits, 20 lookups / 10 min per IP,
+        8 attempts / hour per searched name or ID.
+
+--- 7.2 SIGN-IN ---
+POST  /api/auth/login             { email, password, remember }
+POST  /api/auth/logout
+GET   /api/auth/me                Current user (or user: null)
+POST  /api/auth/change-password   { currentPassword, newPassword }
+        (min 10 characters, letters + a number)
+        Account locks for 15 minutes after 5 wrong passwords.
+
+--- 7.3 ADMIN (sign-in required) ---
+GET   /api/admin/bootstrap        Everything the dashboard needs
+                                  (all collections + recent activity)
+PUT   /api/admin/settings         Update settings            [admin only]
+
+Users                                                         [admin only]
+GET   /api/admin/users
+POST  /api/admin/users            { email, name, role, password }
+PUT   /api/admin/users/:id        { name, role, active, password }
+
+Attendance
+PUT   /api/admin/attendance/:assignmentId   { status, checkIn, notes }
+
+Standard CRUD for these collections:
+    volunteers   teams   venues   shifts   assignments
+    sessions (public schedule)   announcements
+
+    GET     /api/admin/<collection>          list all
+    GET     /api/admin/<collection>/:id      one record
+    POST    /api/admin/<collection>          create      (admin, coordinator)
+    PUT     /api/admin/<collection>/:id      update      (admin, coordinator)
+    PATCH   /api/admin/<collection>/:id      update      (admin, coordinator)
+    DELETE  /api/admin/<collection>/:id      delete      (admin only)
+
+Business rules the server enforces
+  - Only APPROVED volunteers can be assigned.
+  - Rejecting a volunteer cancels their assignments.
+  - Shift end must be after start; reporting/setup times must be valid.
+  - A shift must belong to the same team as its assignment.
+  - Team names (active) and venue codes must be unique.
+  - A team that still has active assignments cannot be deleted
+    (archive it instead).
+  - Editing a shift updates the times/venue of its assignments.
+  - You cannot demote/disable yourself or the last active admin.
+  - Every change is written to the activity log.
+
+
+8. SECURITY SUMMARY
+---------------------------------------------------------------------
+  - Passwords hashed with scrypt; no plain-text passwords stored.
+  - Secure session cookie, idle + absolute expiry, lock-out after
+    repeated failures, per-IP rate limits.
+  - Roles enforced on the server (not only hidden in the screen).
+  - CSRF protection, strict Content-Security-Policy and other
+    security headers.
+  - All input validated on the server; database queries are
+    parameterised (SQL-injection safe); output is escaped.
+  - Admin pages redirect to the login screen when not signed in.
+
+
+9. BEFORE GOING LIVE (NOT DONE AUTOMATICALLY)
+---------------------------------------------------------------------
+  1. Put the site behind HTTPS and set NODE_ENV=production,
+     COOKIE_SECURE=1 (and TRUST_PROXY=1 if using a reverse proxy).
+  2. Set up daily backups of the data/ folder.
+  3. Replace the placeholder contact details and the event date in
+     Settings.
+  4. Rate-limit counters are kept in memory (reset when the server
+     restarts) and assume ONE server process.
+  5. There is no email/SMS: volunteers see their ID on the screen after
+     registering; password resets are done by an admin.
+  6. Do not run "seed-demo" on the real database.
+
+
+10. FOLDER MAP
+---------------------------------------------------------------------
+  anubhav-app/
+    HOW-TO-RUN-AND-API.txt   <- this file
+    README.md                short English summary
+    package.json             npm commands (start, test, create-admin ...)
+    data/                    DATABASE FILES live here
+    server/
+      index.js               starts the server
+      app.js                 routing, static files, security headers
+      auth.js                passwords, sessions, roles
+      db.js                  database tables + migrations
+      resources.js           field rules for each record type
+      validate.js            input validation
+      settings.js            settings rules and defaults
+      cli.js                 create-admin / reset-password / seed-demo
+      demo-seed.js           sample data (only for seed-demo)
+      routes/                auth.js, public.js, admin.js (the API)
+    public/                  the website (HTML, css/, js/)
+    tests/                   automated tests
+  anubhav-ui-prototype/      Phase 1 UI-only version (kept for reference)
+
+=====================================================================

@@ -1,0 +1,14 @@
+{
+  "name": "anubhav-volunteer-system",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Anubhav — A Day of Learning & Training: volunteer management (vanilla JS front end, Node + SQLite back end)",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node server/index.js",
+    "create-admin": "node server/cli.js create-admin",
+    "reset-password": "node server/cli.js reset-password",
+    "seed-demo": "node server/cli.js seed-demo",
+    "test": "node --no-warnings --test tests/*.test.js"
+  }
+}
