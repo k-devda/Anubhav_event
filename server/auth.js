@@ -53,18 +53,20 @@ function parseCookies(header) {
   const out = {};
   String(header || '').split(';').forEach(part => {
     const i = part.indexOf('=');
-    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    if (i > 0) {
+      try { out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim()); } catch (e) { /* ignore malformed cookie */ }
+    }
   });
   return out;
 }
 
-function createSession(db, userId, { remember, ip, userAgent }) {
+async function createSession(db, userId, { remember, ip, userAgent }) {
   const token = crypto.randomBytes(32).toString('base64url');
   const t = Date.now();
   const idle = t + config.sessionIdleHours * 3600e3;
   const absolute = t + (remember ? config.rememberDays : config.sessionAbsoluteDays) * 86400e3;
-  db.prepare('INSERT INTO auth_sessions (token_hash,user_id,created_at,expires_at,absolute_expires_at,ip,user_agent) VALUES (?,?,?,?,?,?,?)')
-    .run(sha256(token), userId, now(), new Date(Math.min(remember ? absolute : idle, absolute)).toISOString(), new Date(absolute).toISOString(), ip || '', String(userAgent || '').slice(0, 200));
+  await db.run('INSERT INTO auth_sessions (token_hash,user_id,created_at,expires_at,absolute_expires_at,ip,user_agent) VALUES (?,?,?,?,?,?,?)',
+    [sha256(token), userId, now(), new Date(Math.min(remember ? absolute : idle, absolute)).toISOString(), new Date(absolute).toISOString(), ip || '', String(userAgent || '').slice(0, 200)]);
   return { token, maxAge: remember ? config.rememberDays * 86400 : 0 };
 }
 
@@ -77,35 +79,35 @@ function cookieHeader(token, maxAgeSec) {
 const clearCookieHeader = () => `${COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${config.cookieSecure ? '; Secure' : ''}`;
 
 /** Resolve the signed-in user from the request cookie (sliding idle expiry). */
-function userFromRequest(db, req) {
+async function userFromRequest(db, req) {
   const token = parseCookies(req.headers.cookie)[COOKIE];
   if (!token || token.length > 100) return null;
   const hash = sha256(token);
-  const row = db.prepare(`SELECT s.expires_at, s.absolute_expires_at, u.id, u.email, u.name, u.role, u.active, u.must_change_password
-    FROM auth_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?`).get(hash);
+  const row = await db.get(`SELECT s.expires_at, s.absolute_expires_at, u.id, u.email, u.name, u.role, u.active, u.must_change_password
+    FROM auth_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?`, [hash]);
   if (!row) return null;
   const t = Date.now();
   if (!row.active || Date.parse(row.expires_at) < t || Date.parse(row.absolute_expires_at) < t) {
-    db.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').run(hash);
+    await db.run('DELETE FROM auth_sessions WHERE token_hash = ?', [hash]);
     return null;
   }
   // slide idle window at most once a minute to avoid a write per request
   const newExpiry = Math.min(t + config.sessionIdleHours * 3600e3, Date.parse(row.absolute_expires_at));
-  if (newExpiry - Date.parse(row.expires_at) > 60e3) db.prepare('UPDATE auth_sessions SET expires_at = ? WHERE token_hash = ?').run(new Date(newExpiry).toISOString(), hash);
+  if (newExpiry - Date.parse(row.expires_at) > 60e3) await db.run('UPDATE auth_sessions SET expires_at = ? WHERE token_hash = ?', [new Date(newExpiry).toISOString(), hash]);
   return { id: row.id, email: row.email, name: row.name, role: row.role, mustChangePassword: !!row.must_change_password, tokenHash: hash };
 }
 
-function destroySession(db, req) {
+async function destroySession(db, req) {
   const token = parseCookies(req.headers.cookie)[COOKIE];
-  if (token) db.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').run(sha256(token));
+  if (token) await db.run('DELETE FROM auth_sessions WHERE token_hash = ?', [sha256(token)]);
 }
 
 const publicUser = u => ({ id: u.id, email: u.email, name: u.name, role: u.role, mustChangePassword: !!u.mustChangePassword });
 
 async function createUser(db, { email, name, role, password, mustChange }) {
   const id = uid('usr');
-  db.prepare('INSERT INTO users (id,email,name,role,password_hash,active,must_change_password,created_at,updated_at) VALUES (?,?,?,?,?,1,?,?,?)')
-    .run(id, email.toLowerCase(), name, role, await hashPassword(password), mustChange ? 1 : 0, now(), now());
+  await db.run('INSERT INTO users (id,email,name,role,password_hash,active,must_change_password,created_at,updated_at) VALUES (?,?,?,?,?,1,?,?,?)',
+    [id, email.toLowerCase(), name, role, await hashPassword(password), mustChange ? 1 : 0, now(), now()]);
   return id;
 }
 

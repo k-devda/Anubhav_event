@@ -12,9 +12,9 @@ module.exports = {
   dbFile: process.env.DB_FILE || path.join(root, 'data', 'anubhav.sqlite'),
   publicDir: path.join(root, 'public'),
   // Set COOKIE_SECURE=1 when the site is served over HTTPS (always in production behind a TLS proxy)
-  cookieSecure: process.env.COOKIE_SECURE ? process.env.COOKIE_SECURE === '1' : isProd,
-  // Trust X-Forwarded-For only when explicitly running behind your own reverse proxy
-  trustProxy: process.env.TRUST_PROXY === '1',
+  cookieSecure: process.env.COOKIE_SECURE ? process.env.COOKIE_SECURE === '1' : (isProd || !!process.env.VERCEL),
+  // Trust X-Forwarded-For only when behind a proxy you control (Vercel always is)
+  trustProxy: process.env.TRUST_PROXY === '1' || !!process.env.VERCEL,
   sessionIdleHours: 12,
   sessionAbsoluteDays: 7,
   rememberDays: 30,

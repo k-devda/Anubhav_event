@@ -47,7 +47,7 @@ test('a fresh database starts with the real event days and the SLS Building venu
   const pub = (await app.client().get('/api/public/bootstrap')).json.settings;
   assert.deepEqual(pub.days.map(d => [d.label, d.date]), [['Event Day 1', '2026-10-27'], ['Event Day 2', '2026-10-28']]);
   assert.equal(pub.eventInfo.venue, 'SLS Building');
-  assert.equal(seedEventBasics(app.db), true);
-  assert.equal(seedEventBasics(app.db), false, 'never adds a second venue');
-  assert.deepEqual(app.db.prepare('SELECT name, code FROM venues').all().map(v => [v.name, v.code]), [['SLS Building', 'SLS']]);
+  // the app already seeded the venue while preparing the new database, so a repeat adds nothing
+  assert.equal(await seedEventBasics(app.db), false, 'never adds a second venue');
+  assert.deepEqual((await app.db.all('SELECT name, code FROM venues')).map(v => [v.name, v.code]), [['SLS Building', 'SLS']]);
 });

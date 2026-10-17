@@ -150,32 +150,64 @@ function toColumns(res, values) {
   return cols;
 }
 
-function list(db, name) {
+async function list(db, name) {
   const res = RESOURCES[name];
-  return db.prepare(`SELECT * FROM ${res.table} ORDER BY ${res.order}`).all().map(r => fromRow(res, r));
+  return (await db.all(`SELECT * FROM ${res.table} ORDER BY ${res.order}`)).map(r => fromRow(res, r));
 }
-function get(db, name, id) {
+async function get(db, name, id) {
   const res = RESOURCES[name];
-  return fromRow(res, db.prepare(`SELECT * FROM ${res.table} WHERE id = ?`).get(id));
+  return fromRow(res, await db.get(`SELECT * FROM ${res.table} WHERE id = ?`, [id]));
 }
-function insert(db, name, values, forcedId) {
+async function insert(db, name, values, forcedId) {
   const res = RESOURCES[name];
   const id = forcedId || uid(res.prefix);
   const cols = Object.assign({ id }, toColumns(res, values), { updated_at: now() });
   const keys = Object.keys(cols);
-  db.prepare(`INSERT INTO ${res.table} (${keys.join(',')}) VALUES (${keys.map(() => '?').join(',')})`).run(...Object.values(cols));
+  await db.run(`INSERT INTO ${res.table} (${keys.join(',')}) VALUES (${keys.map(() => '?').join(',')})`, Object.values(cols));
   return get(db, name, id);
 }
-function update(db, name, id, values) {
+async function update(db, name, id, values) {
   const res = RESOURCES[name];
   const cols = Object.assign(toColumns(res, values), { updated_at: now() });
   const keys = Object.keys(cols);
-  db.prepare(`UPDATE ${res.table} SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE id = ?`).run(...Object.values(cols), id);
+  await db.run(`UPDATE ${res.table} SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE id = ?`, [...Object.values(cols), id]);
   return get(db, name, id);
 }
-function remove(db, name, id) {
+
+/**
+ * Delete a record together with everything that depends on it. Done explicitly
+ * (children first) so it behaves the same whether or not the database enforces
+ * foreign keys — hosted libSQL connections may not.
+ */
+async function remove(db, name, id) {
+  const del = (sql, args) => db.run(sql, args);
+  const nul = (table, col) => db.run(`UPDATE ${table} SET ${col} = NULL WHERE ${col} = ?`, [id]);
+  switch (name) {
+    case 'volunteers':
+      await del('DELETE FROM attendance WHERE id IN (SELECT id FROM assignments WHERE volunteer_id = ?)', [id]);
+      await del('DELETE FROM assignments WHERE volunteer_id = ?', [id]);
+      break;
+    case 'assignments':
+      await del('DELETE FROM attendance WHERE id = ?', [id]);
+      break;
+    case 'teams':
+      await del('DELETE FROM attendance WHERE id IN (SELECT id FROM assignments WHERE team_id = ?)', [id]);
+      await del('DELETE FROM assignments WHERE team_id = ?', [id]);
+      await del('DELETE FROM shifts WHERE team_id = ?', [id]);
+      await nul('event_sessions', 'team_id');
+      await nul('announcements', 'team_id');
+      break;
+    case 'shifts':
+      await nul('assignments', 'shift_id');
+      break;
+    case 'venues':
+      for (const t of ['teams', 'shifts', 'assignments', 'event_sessions']) await nul(t, 'venue_id');
+      break;
+    default:
+      break;
+  }
   const res = RESOURCES[name];
-  return db.prepare(`DELETE FROM ${res.table} WHERE id = ?`).run(id).changes;
+  return (await del(`DELETE FROM ${res.table} WHERE id = ?`, [id])).changes;
 }
 
 module.exports = { RESOURCES, list, get, insert, update, remove, fromRow };

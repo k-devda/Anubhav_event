@@ -35,7 +35,7 @@ test('account locks after repeated failures, even for the right password', async
   for (let i = 0; i < 5; i++) assert.equal((await c.login('locky@example.com', 'wrong-password-1')).status, 401);
   const locked = await c.login('locky@example.com', 'CorrectHorse123');
   assert.equal(locked.status, 429);
-  app.limiter.reset();
+  await app.limiter.reset();
 });
 
 test('temporary password must be changed before using the admin API', async () => {

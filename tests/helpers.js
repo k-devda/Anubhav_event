@@ -3,12 +3,23 @@ const http = require('node:http');
 const { open } = require('../server/db');
 const { createApp } = require('../server/app');
 const auth = require('../server/auth');
-const settingsStore = require('../server/settings');
+const { prepareDatabase } = require('../server/bootstrap');
+const os = require('node:os');
+const path = require('node:path');
+const fs = require('node:fs');
 
 /** Boots the real app on a random port with a fresh in-memory database. */
 async function start() {
-  const db = open(':memory:');
-  settingsStore.get(db);
+  // TEST_BACKEND=libsql runs the whole suite against the hosted-database code path (a local libSQL file).
+  let dbFile = null;
+  let db;
+  if (process.env.TEST_BACKEND === 'libsql') {
+    dbFile = path.join(os.tmpdir(), `anubhav-test-${process.pid}-${Math.random().toString(36).slice(2)}.db`);
+    db = await open({ url: 'file:' + dbFile.split(path.sep).join('/') });
+  } else {
+    db = await open({ file: ':memory:' });
+  }
+  await prepareDatabase(db, {}, () => {});
   const { handler, limiter } = createApp(db);
   const server = http.createServer(handler);
   await new Promise(r => server.listen(0, '127.0.0.1', r));
@@ -31,7 +42,7 @@ async function start() {
       post: (p, b, h) => c.req('POST', p, b === undefined ? {} : b, h),
       put: (p, b) => c.req('PUT', p, b),
       del: p => c.req('DELETE', p),
-      async login(email, password) { limiter.reset(); return c.post('/api/auth/login', { email, password }); }
+      async login(email, password) { await limiter.reset(); return c.post('/api/auth/login', { email, password }); }
     };
     return c;
   }
@@ -42,14 +53,14 @@ async function start() {
 
   async function adminClient() {
     await makeUser('admin', `admin${Math.random().toString(36).slice(2, 7)}@example.com`, 'Passw0rdPassw0rd');
-    const row = db.prepare("SELECT email FROM users WHERE role='admin' ORDER BY created_at DESC LIMIT 1").get();
+    const row = await db.get("SELECT email FROM users WHERE role='admin' ORDER BY created_at DESC LIMIT 1");
     const c = client();
     const r = await c.login(row.email, 'Passw0rdPassw0rd');
     if (r.status !== 200) throw new Error('admin login failed ' + JSON.stringify(r.json));
     return c;
   }
 
-  return { db, base, client, makeUser, adminClient, limiter, close: () => new Promise(r => server.close(r)) };
+  return { db, base, client, makeUser, adminClient, limiter, close: async () => { await new Promise(r => server.close(r)); await db.close(); if (dbFile) for (const x of [dbFile, dbFile + '-wal', dbFile + '-shm', dbFile + '-journal']) { try { fs.rmSync(x, { force: true }); } catch (e) { /* Windows may keep the handle a moment; the OS temp folder is cleaned later */ } } } };
 }
 
 const validReg = (over) => Object.assign({

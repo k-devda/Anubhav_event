@@ -2,11 +2,10 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const config = require('./config');
 const { AppError, now } = require('./util');
 const { check } = require('./validate');
 
-/** The browser seed file is the single source for default settings and the optional demo dataset. */
+/** Sample dataset for `npm run seed-demo` (local/demo use only). */
 function loadSeed() {
   const code = fs.readFileSync(path.join(__dirname, 'demo-seed.js'), 'utf8');
   const sandbox = { window: {} };
@@ -17,22 +16,49 @@ function loadSeed() {
 const REG_KEYS = ['institution', 'course', 'year', 'skills', 'areas', 'availability', 'experience', 'notes'];
 const VIS_KEYS = ['teams', 'schedule', 'announcements', 'findRole', 'registration', 'rosterNames'];
 
+/** Settings for a brand-new database: the real event (edit anytime in Admin -> Settings). */
 function defaults() {
-  const s = loadSeed().settings;
-  s.visibility.rosterNames = true;
-  // A brand-new install starts with the real event: two days at the SLS Building.
-  // (Edit anytime in Admin -> Settings -> Event days / Event details.)
-  s.days = [
-    { id: 'event', label: 'Event Day 1', date: '2026-10-27', note: '' },
-    { id: 'day2', label: 'Event Day 2', date: '2026-10-28', note: '' }
-  ];
-  s.eventInfo = { date: '27–28 October 2026', venue: 'SLS Building' };
-  return s;
+  return {
+    eventName: 'Anubhav',
+    subtitle: 'A Day of Learning & Training',
+    presenter: 'PDEU College presents',
+    organizers: [
+      { name: 'Sanket Health & Wellness Centre', role: 'Organizer' },
+      { name: 'PDEU College', role: 'Institutional partner' }
+    ],
+    timezone: 'Asia/Kolkata',
+    days: [
+      { id: 'event', label: 'Event Day 1', date: '2026-10-27', note: '' },
+      { id: 'day2', label: 'Event Day 2', date: '2026-10-28', note: '' }
+    ],
+    idFormat: { prefix: 'ANU-', digits: 4 },
+    assignmentInstructions: 'Please arrive at your reporting time, wear your volunteer badge, and check in with your team leader before starting.\nKeep your phone on silent and stay at your assigned venue unless told otherwise.',
+    visibility: { teams: true, schedule: true, announcements: true, findRole: true, registration: true, rosterNames: true },
+    contact: {
+      email: '[Contact email — to be added]',
+      phone: '[Contact phone — to be added]',
+      helpdesk: '[Helpdesk location — to be added]'
+    },
+    eventInfo: { date: '27–28 October 2026', venue: 'SLS Building' },
+    registrationFields: {
+      institution: { show: true, required: true },
+      course: { show: true, required: true },
+      year: { show: true, required: true },
+      skills: { show: true, required: false },
+      areas: { show: true, required: false },
+      availability: { show: true, required: true },
+      experience: { show: true, required: false },
+      notes: { show: true, required: false }
+    }
+  };
 }
 
-function get(db) {
-  const row = db.prepare("SELECT value FROM settings WHERE key = 'main'").get();
-  if (!row) { const d = defaults(); db.prepare("INSERT INTO settings (key,value,updated_at) VALUES ('main',?,?)").run(JSON.stringify(d), now()); return d; }
+async function get(db) {
+  let row = await db.get("SELECT value FROM settings WHERE key = 'main'");
+  if (!row) {
+    await db.run("INSERT OR IGNORE INTO settings (key,value,updated_at) VALUES ('main',?,?)", [JSON.stringify(defaults()), now()]);
+    row = await db.get("SELECT value FROM settings WHERE key = 'main'");
+  }
   const s = JSON.parse(row.value);
   if (s.visibility && s.visibility.rosterNames === undefined) s.visibility.rosterNames = true;
   return s;
@@ -97,9 +123,9 @@ function validateSettings(input) {
   return out;
 }
 
-function save(db, value) {
-  db.prepare("INSERT INTO settings (key,value,updated_at) VALUES ('main',?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at")
-    .run(JSON.stringify(value), now());
+async function save(db, value) {
+  await db.run("INSERT INTO settings (key,value,updated_at) VALUES ('main',?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+    [JSON.stringify(value), now()]);
 }
 
 module.exports = { loadSeed, defaults, get, save, validateSettings };

@@ -1,18 +1,28 @@
 'use strict';
+/**
+ * Database access with one small async API and two interchangeable backends:
+ *   - local SQLite file via Node's built-in node:sqlite (default; used for local runs and tests)
+ *   - hosted Turso / libSQL over HTTP (used on Vercel; set TURSO_DATABASE_URL + TURSO_AUTH_TOKEN)
+ *
+ *   await db.get(sql, args)   -> first row object or null
+ *   await db.all(sql, args)   -> array of row objects
+ *   await db.run(sql, args)   -> { changes }
+ *   await db.exec(script)     -> runs one or more statements
+ *   await db.tx(async t => {}) -> runs inside a write transaction (t has the same API)
+ */
 const fs = require('node:fs');
 const path = require('node:path');
-const { DatabaseSync } = require('node:sqlite');
 
 const MIGRATIONS = [
   /* v1 — initial schema */
   `
-  CREATE TABLE settings (
+  CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
 
-  CREATE TABLE users (
+  CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     email TEXT NOT NULL UNIQUE COLLATE NOCASE,
     name TEXT NOT NULL,
@@ -27,7 +37,7 @@ const MIGRATIONS = [
     updated_at TEXT NOT NULL
   );
 
-  CREATE TABLE auth_sessions (
+  CREATE TABLE IF NOT EXISTS auth_sessions (
     token_hash TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     created_at TEXT NOT NULL,
@@ -36,9 +46,9 @@ const MIGRATIONS = [
     ip TEXT,
     user_agent TEXT
   );
-  CREATE INDEX idx_auth_sessions_user ON auth_sessions(user_id);
+  CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id);
 
-  CREATE TABLE volunteers (
+  CREATE TABLE IF NOT EXISTS volunteers (
     id TEXT PRIMARY KEY,
     seq INTEGER NOT NULL UNIQUE,
     name TEXT NOT NULL,
@@ -56,9 +66,9 @@ const MIGRATIONS = [
     registered_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
-  CREATE INDEX idx_volunteers_status ON volunteers(status);
+  CREATE INDEX IF NOT EXISTS idx_volunteers_status ON volunteers(status);
 
-  CREATE TABLE venues (
+  CREATE TABLE IF NOT EXISTS venues (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     code TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -73,7 +83,7 @@ const MIGRATIONS = [
     updated_at TEXT NOT NULL
   );
 
-  CREATE TABLE teams (
+  CREATE TABLE IF NOT EXISTS teams (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
@@ -87,7 +97,7 @@ const MIGRATIONS = [
     updated_at TEXT NOT NULL
   );
 
-  CREATE TABLE shifts (
+  CREATE TABLE IF NOT EXISTS shifts (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     day TEXT NOT NULL,
@@ -103,9 +113,9 @@ const MIGRATIONS = [
     instructions TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL
   );
-  CREATE INDEX idx_shifts_team ON shifts(team_id);
+  CREATE INDEX IF NOT EXISTS idx_shifts_team ON shifts(team_id);
 
-  CREATE TABLE assignments (
+  CREATE TABLE IF NOT EXISTS assignments (
     id TEXT PRIMARY KEY,
     volunteer_id TEXT NOT NULL REFERENCES volunteers(id) ON DELETE CASCADE,
     team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
@@ -122,11 +132,11 @@ const MIGRATIONS = [
     status TEXT NOT NULL DEFAULT 'Active' CHECK (status IN ('Active','Draft','Cancelled')),
     updated_at TEXT NOT NULL
   );
-  CREATE INDEX idx_assignments_volunteer ON assignments(volunteer_id);
-  CREATE INDEX idx_assignments_team ON assignments(team_id);
-  CREATE INDEX idx_assignments_shift ON assignments(shift_id);
+  CREATE INDEX IF NOT EXISTS idx_assignments_volunteer ON assignments(volunteer_id);
+  CREATE INDEX IF NOT EXISTS idx_assignments_team ON assignments(team_id);
+  CREATE INDEX IF NOT EXISTS idx_assignments_shift ON assignments(shift_id);
 
-  CREATE TABLE event_sessions (
+  CREATE TABLE IF NOT EXISTS event_sessions (
     id TEXT PRIMARY KEY,
     day TEXT NOT NULL,
     name TEXT NOT NULL,
@@ -139,7 +149,7 @@ const MIGRATIONS = [
     updated_at TEXT NOT NULL
   );
 
-  CREATE TABLE announcements (
+  CREATE TABLE IF NOT EXISTS announcements (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     message TEXT NOT NULL,
@@ -152,7 +162,7 @@ const MIGRATIONS = [
     updated_at TEXT NOT NULL
   );
 
-  CREATE TABLE attendance (
+  CREATE TABLE IF NOT EXISTS attendance (
     id TEXT PRIMARY KEY REFERENCES assignments(id) ON DELETE CASCADE,
     status TEXT NOT NULL DEFAULT 'Not Marked' CHECK (status IN ('Not Marked','Present','Absent','Late','Excused')),
     check_in TEXT NOT NULL DEFAULT '',
@@ -161,7 +171,7 @@ const MIGRATIONS = [
     updated_at TEXT NOT NULL
   );
 
-  CREATE TABLE activity (
+  CREATE TABLE IF NOT EXISTS activity (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     at TEXT NOT NULL,
     user_id TEXT,
@@ -169,43 +179,122 @@ const MIGRATIONS = [
     type TEXT NOT NULL,
     text TEXT NOT NULL
   );
+  `,
+  /* v2 — rate limits shared by every server instance (serverless-safe) */
+  `
+  CREATE TABLE IF NOT EXISTS rate_hits (
+    key TEXT NOT NULL,
+    at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_rate_hits_key ON rate_hits(key, at);
   `
 ];
 
-function open(file) {
+// node:sqlite and libSQL both reject `undefined`; booleans are stored as 0/1.
+const clean = args => (args || []).map(v => (v === undefined ? null : typeof v === 'boolean' ? (v ? 1 : 0) : v));
+const plain = row => (row ? Object.assign({}, row) : null);
+
+/* ---------------- local SQLite file (node:sqlite) ---------------- */
+function sqliteBackend(file) {
+  const { DatabaseSync } = require('node:sqlite');
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
-  const db = new DatabaseSync(file);
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
-  migrate(db);
+  const raw = new DatabaseSync(file);
+  raw.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+  const api = {
+    async get(sql, args) { return plain(raw.prepare(sql).get(...clean(args))); },
+    async all(sql, args) { return raw.prepare(sql).all(...clean(args)).map(plain); },
+    async run(sql, args) { const r = raw.prepare(sql).run(...clean(args)); return { changes: Number(r.changes) }; },
+    async exec(sql) { raw.exec(sql); }
+  };
+  // One connection: run transactions one at a time so their statements never interleave.
+  let queue = Promise.resolve();
+  function tx(fn) {
+    const run = queue.then(async () => {
+      raw.exec('BEGIN IMMEDIATE');
+      try {
+        const out = await fn(api);
+        raw.exec('COMMIT');
+        return out;
+      } catch (e) {
+        try { raw.exec('ROLLBACK'); } catch (_) { /* already rolled back */ }
+        throw e;
+      }
+    });
+    queue = run.catch(() => {});
+    return run;
+  }
+  return Object.assign({ kind: 'sqlite', tx, close: async () => raw.close() }, api);
+}
+
+/* ---------------- hosted Turso / libSQL ---------------- */
+function libsqlBackend(url, authToken) {
+  // The /web client is pure JavaScript over HTTP (what Vercel recommends); file: URLs need the native client.
+  const { createClient } = url.startsWith('file:') ? require('@libsql/client') : require('@libsql/client/web');
+  const client = createClient({ url, authToken: authToken || undefined });
+  const rowsOf = rs => rs.rows.map(r => {
+    const o = {};
+    rs.columns.forEach((c, i) => { o[c] = typeof r[i] === 'bigint' ? Number(r[i]) : r[i]; });
+    return o;
+  });
+  const make = execute => ({
+    async get(sql, args) { return rowsOf(await execute({ sql, args: clean(args) }))[0] || null; },
+    async all(sql, args) { return rowsOf(await execute({ sql, args: clean(args) })); },
+    async run(sql, args) { const rs = await execute({ sql, args: clean(args) }); return { changes: Number(rs.rowsAffected) }; }
+  });
+  const api = Object.assign(make(s => client.execute(s)), { exec: sql => client.executeMultiple(sql) });
+  async function tx(fn) {
+    const t = await client.transaction('write');
+    try {
+      const out = await fn(Object.assign(make(s => t.execute(s)), { exec: sql => t.executeMultiple(sql) }));
+      await t.commit();
+      return out;
+    } catch (e) {
+      try { await t.rollback(); } catch (_) { /* connection already closed */ }
+      throw e;
+    } finally {
+      t.close();
+    }
+  }
+  return Object.assign({ kind: 'libsql', tx, close: async () => client.close() }, api);
+}
+
+async function migrate(db) {
+  await db.exec('CREATE TABLE IF NOT EXISTS schema_meta (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)');
+  if (!(await db.get('SELECT version FROM schema_meta WHERE id = 1'))) {
+    // Databases created before schema_meta existed recorded their version in PRAGMA user_version.
+    let legacy = 0;
+    try { legacy = Number((await db.get('PRAGMA user_version') || {}).user_version) || 0; } catch (_) { /* not supported */ }
+    await db.run('INSERT OR IGNORE INTO schema_meta (id, version) VALUES (1, ?)', [legacy]);
+  }
+  for (let v = 0; v < MIGRATIONS.length; v++) {
+    await db.tx(async t => {
+      const current = Number((await t.get('SELECT version FROM schema_meta WHERE id = 1')).version);
+      if (current > v) return; // already applied (possibly by another instance)
+      await t.exec(MIGRATIONS[v]);
+      await t.run('UPDATE schema_meta SET version = ? WHERE id = 1', [v + 1]);
+    });
+  }
+}
+
+/**
+ * Open the database.
+ *   open({ url, authToken })  -> Turso / libSQL (url like libsql://... or file:...)
+ *   open({ file })            -> local SQLite file (or ':memory:')
+ */
+async function open(opts) {
+  const db = opts.url ? libsqlBackend(opts.url, opts.authToken) : sqliteBackend(opts.file);
+  await migrate(db);
   return db;
 }
 
-function migrate(db) {
-  const current = db.prepare('PRAGMA user_version').get().user_version;
-  for (let v = current; v < MIGRATIONS.length; v++) {
-    db.exec('BEGIN');
-    try {
-      db.exec(MIGRATIONS[v]);
-      db.exec(`PRAGMA user_version = ${v + 1}`);
-      db.exec('COMMIT');
-    } catch (e) {
-      db.exec('ROLLBACK');
-      throw e;
-    }
-  }
+/** Which database to use, from environment variables. */
+function optionsFromEnv(env, defaultFile) {
+  const url = env.TURSO_DATABASE_URL || env.LIBSQL_URL || '';
+  if (url) return { url, authToken: env.TURSO_AUTH_TOKEN || env.LIBSQL_AUTH_TOKEN || '' };
+  return { file: env.DB_FILE || defaultFile };
 }
 
-/** Run fn inside a transaction; rolls back on throw. */
-function tx(db, fn) {
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    const out = fn();
-    db.exec('COMMIT');
-    return out;
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
-  }
-}
+/** Run fn inside a write transaction; rolls back on throw. */
+const tx = (db, fn) => db.tx(fn);
 
-module.exports = { open, tx };
+module.exports = { open, optionsFromEnv, tx, MIGRATIONS };

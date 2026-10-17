@@ -74,3 +74,21 @@ The repo includes a `Dockerfile` (no npm install step - the app has no dependenc
 
 A brand-new database starts with Event Day 1 (27 Oct 2026), Event Day 2 (28 Oct 2026) and the venue "SLS Building".
 Do not run `seed-demo` on a live database. Back up the volume regularly.
+
+## Deploying on Vercel with a free Turso database
+
+Vercel serves the website from its CDN and runs the API as a function (`api/index.js`); the data lives in a
+free hosted **Turso** (libSQL/SQLite) database, so nothing is lost when the site is idle or redeployed.
+
+1. Create a Turso database (Vercel Marketplace -> Turso, or turso.tech) and note its URL and auth token.
+2. Import this GitHub repo into Vercel (framework: Other, no build command; `vercel.json` sets everything).
+3. Environment variables on the Vercel project:
+
+| Variable | Value |
+|---|---|
+| `TURSO_DATABASE_URL` | `libsql://...` (from Turso / the Marketplace integration) |
+| `TURSO_AUTH_TOKEN` | token for that database |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | creates the first admin on first start; you must choose a new password at first sign-in. Delete `ADMIN_PASSWORD` afterwards. |
+
+The same code also runs on a plain server (local SQLite file, or Docker + disk). To run the tests against the
+hosted-database code path locally: `TEST_BACKEND=libsql npm test`.

@@ -330,4 +330,20 @@ Business rules the server enforces
   (28 Oct 2026) and the venue "SLS Building".
   Never run "npm run seed-demo" on a live database. Back up the volume.
 
+12. DEPLOYING ON VERCEL + FREE TURSO DATABASE (data is kept)
+---------------------------------------------------------------------
+  Vercel = the shop front (website + API function). Turso = the storeroom
+  (free hosted database). Data stays safe when the site is idle/redeployed.
+    1. Make a Turso database; note its URL (libsql://...) and auth token.
+    2. Import the GitHub repo into Vercel (framework "Other", no build command).
+    3. Vercel environment variables:
+         TURSO_DATABASE_URL  = libsql://...
+         TURSO_AUTH_TOKEN    = (token)
+         ADMIN_EMAIL         = your email   (first admin, created once)
+         ADMIN_PASSWORD      = 10+ chars, letters + a number (change at first
+                               sign-in; delete this variable afterwards)
+    4. Deploy, open the site, sign in at /login.html.
+  Local runs and Docker/Render still work unchanged (local SQLite file).
+  Test the hosted-database code path locally:  TEST_BACKEND=libsql npm test
+
 =====================================================================

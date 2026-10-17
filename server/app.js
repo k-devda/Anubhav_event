@@ -21,7 +21,7 @@ const SECURITY_HEADERS = {
 
 function createApp(db, opts) {
   opts = opts || {};
-  const limiter = createLimiter();
+  const limiter = createLimiter(db);
   const routes = [];
   const router = {
     add(method, pattern, handler) {
@@ -53,6 +53,14 @@ function createApp(db, opts) {
   const sendJson = (res, status, obj, headers) => send(res, status, obj, Object.assign({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }, headers));
 
   function readBody(req) {
+    // Vercel's Node runtime pre-parses JSON into req.body (reading the stream afterwards would hang).
+    if (req.body !== undefined && req.body !== null) {
+      const len = Number(req.headers['content-length'] || 0);
+      if (len > config.maxBodyBytes) return Promise.reject(new AppError(413, 'Request is too large.'));
+      if (!/application\/json/i.test(req.headers['content-type'] || '')) return Promise.reject(new AppError(415, 'Send JSON with Content-Type: application/json.'));
+      if (typeof req.body === 'string') { try { return Promise.resolve(JSON.parse(req.body)); } catch (e) { return Promise.reject(new AppError(400, 'Invalid JSON.')); } }
+      return Promise.resolve(Buffer.isBuffer(req.body) ? {} : req.body);
+    }
     return new Promise((resolve, reject) => {
       const chunks = []; let size = 0;
       req.on('data', c => {
@@ -89,8 +97,15 @@ function createApp(db, opts) {
     if (method !== 'GET') csrfCheck(req);
     const m = url.pathname.match(route.re);
     const params = {}; route.keys.forEach((k, i) => { params[k] = decodeURIComponent(m[i + 1]); });
-    const body = ['POST', 'PUT', 'PATCH'].includes(method) ? await readBody(req) : {};
-    const user = auth.userFromRequest(db, req);
+    let body = {};
+    if (['POST', 'PUT', 'PATCH'].includes(method)) {
+      try { body = await readBody(req); }
+      catch (e) {
+        if (e instanceof AppError) throw e;
+        throw new AppError(400, 'Invalid JSON.'); // Vercel's body getter throws on malformed JSON
+      }
+    }
+    const user = await auth.userFromRequest(db, req);
     const ctx = { req, res, url, params, body, user, ip: clientIp(req), db, limiter, config, headers: {} };
     const result = await route.handler(ctx);
     const status = ctx.status || 200;
@@ -98,7 +113,7 @@ function createApp(db, opts) {
     sendJson(res, status, result === undefined ? { ok: true } : result, ctx.headers);
   }
 
-  function serveStatic(req, res, url) {
+  async function serveStatic(req, res, url) {
     if (!['GET', 'HEAD'].includes(req.method)) return send(res, 405, 'Method not allowed', { 'Content-Type': 'text/plain' });
     let rel;
     try { rel = decodeURIComponent(url.pathname); } catch (e) { return send(res, 400, 'Bad request', { 'Content-Type': 'text/plain' }); }
@@ -109,7 +124,7 @@ function createApp(db, opts) {
     if (!file.startsWith(config.publicDir + path.sep)) return send(res, 403, 'Forbidden', { 'Content-Type': 'text/plain' });
 
     // Admin screens require a signed-in session (the API enforces this too).
-    if (/^\/admin\/[^/]+\.html$/.test(rel) && !auth.userFromRequest(db, req)) {
+    if (/^\/admin\/[^/]+\.html$/.test(rel) && !(await auth.userFromRequest(db, req))) {
       res.writeHead(302, Object.assign({}, SECURITY_HEADERS, { Location: '/login.html?next=' + encodeURIComponent(rel) }));
       return res.end();
     }
@@ -132,9 +147,9 @@ function createApp(db, opts) {
       return sendJson(res, 400, { error: 'Bad request.' });
     }
     try {
-      if (url.pathname === '/healthz') { db.prepare('SELECT 1').get(); sendJson(res, 200, { ok: true }); }
+      if (url.pathname === '/healthz' || url.pathname === '/api/healthz') { await db.get('SELECT 1 AS ok'); sendJson(res, 200, { ok: true }); }
       else if (url.pathname.startsWith('/api/')) await handleApi(req, res, url);
-      else serveStatic(req, res, url);
+      else await serveStatic(req, res, url);
     } catch (e) {
       if (e instanceof AppError) {
         sendJson(res, e.status, Object.assign({ error: e.message }, e.extra));
